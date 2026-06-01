@@ -16,23 +16,11 @@ import pandas as pd
 
 st.set_page_config(page_title="Ranking & Stats - FitDuel", layout="wide")
 
-# Card styling for graphs
+# Card styling now handled by theme.py (light/dark mode aware)
 st.markdown("""
 <style>
-div[class*="st-key-graph_card"] {
-    background: #FFFFFF !important;
-    box-shadow: 0 4px 24px rgba(16, 185, 129, 0.08), 0 2px 8px rgba(31, 41, 55, 0.06) !important;
-    border-radius: 16px !important;
-    border: 1px solid rgba(16, 185, 129, 0.1) !important;
-    padding: 20px !important;
-    margin-bottom: 16px !important;
-}
-
+div[class*="st-key-graph_card"],
 div[class*="st-key-stats_card"] {
-    background: #FFFFFF !important;
-    box-shadow: 0 4px 24px rgba(16, 185, 129, 0.08), 0 2px 8px rgba(31, 41, 55, 0.06) !important;
-    border-radius: 16px !important;
-    border: 1px solid rgba(16, 185, 129, 0.1) !important;
     padding: 20px !important;
     margin-bottom: 16px !important;
 }

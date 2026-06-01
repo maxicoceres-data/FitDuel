@@ -19,8 +19,12 @@ from database import (
     add_miembro_sesion,
     get_miembros_sesion,
     remove_miembro_sesion,
+    get_notificaciones,
+    get_notificaciones_no_leidas,
+    marcar_todas_leidas,
 )
 from utils import TIPS
+from theme import get_css, get_theme
 
 # ═════════════════════════════════════════════════════════════════════════════
 # PAGE CONFIG
@@ -146,10 +150,75 @@ if "logged_in" not in st.session_state:
     restore_session()
 
 # ═════════════════════════════════════════════════════════════════════════════
+# THEME (Light / Dark)
+# ═════════════════════════════════════════════════════════════════════════════
+
+# Get theme from cookie or default to light
+if "theme_mode" not in st.session_state:
+    saved_theme = cookie_manager.get("theme_mode")
+    st.session_state.theme_mode = saved_theme if saved_theme in ["light", "dark"] else "light"
+
+# Apply theme CSS
+st.markdown(get_css(st.session_state.theme_mode), unsafe_allow_html=True)
+
+# ═════════════════════════════════════════════════════════════════════════════
 # SIDEBAR - LOGO SIEMPRE VISIBLE
 # ═════════════════════════════════════════════════════════════════════════════
 
-st.sidebar.markdown('<div class="logo-title">⚔️</div>', unsafe_allow_html=True)
+# Theme toggle
+def toggle_theme():
+    new_mode = "dark" if st.session_state.theme_mode == "light" else "light"
+    st.session_state.theme_mode = new_mode
+    from datetime import timedelta
+    try:
+        cookie_manager.set("theme_mode", new_mode, expires_at=datetime.now() + timedelta(days=365))
+    except:
+        pass
+
+is_dark = st.session_state.theme_mode == "dark"
+
+# CSS for transparent icon buttons (theme + bell)
+st.sidebar.markdown("""
+<style>
+    /* Icon buttons - no background, no border */
+    div[class*="st-key-theme_btn_container"] button,
+    div[class*="st-key-bell_btn_container"] button {
+        background: transparent !important;
+        border: none !important;
+        box-shadow: none !important;
+        outline: none !important;
+        font-size: 24px !important;
+        padding: 4px !important;
+        min-height: auto !important;
+        height: auto !important;
+        width: auto !important;
+        transition: transform 0.3s ease !important;
+    }
+
+    div[class*="st-key-theme_btn_container"] button:hover {
+        transform: rotate(20deg) scale(1.15);
+        background: transparent !important;
+    }
+
+    div[class*="st-key-bell_btn_container"] button:hover {
+        transform: scale(1.15);
+        background: transparent !important;
+    }
+
+    div[class*="st-key-theme_btn_container"] button:focus,
+    div[class*="st-key-theme_btn_container"] button:active,
+    div[class*="st-key-bell_btn_container"] button:focus,
+    div[class*="st-key-bell_btn_container"] button:active {
+        background: transparent !important;
+        border: none !important;
+        box-shadow: none !important;
+        outline: none !important;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# Logo (centered, full width)
+st.sidebar.markdown('<div class="logo-title" style="text-align:center">⚔️</div>', unsafe_allow_html=True)
 st.sidebar.markdown("<h3 style='text-align: center'>FitDuel</h3>", unsafe_allow_html=True)
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -164,6 +233,63 @@ if st.session_state.get("logged_in"):
     st.sidebar.markdown("---")
     st.sidebar.caption(f"👤 {st.session_state.username}")
     st.sidebar.markdown("---")
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # TOP RIGHT: Notifications bell + Theme toggle (in main area)
+    # ─────────────────────────────────────────────────────────────────────────
+
+    unread = get_notificaciones_no_leidas(st.session_state.user_id)
+    bell_label = "🔔" if unread == 0 else f"🔔 {unread}"
+
+    def toggle_notif():
+        st.session_state.notif_open = not st.session_state.get("notif_open", False)
+
+    # Top right corner: bell + theme
+    col_spacer, col_bell, col_theme = st.columns([12, 1, 1])
+    with col_bell:
+        with st.container(key="bell_btn_container"):
+            st.button(
+                bell_label,
+                key="notif_bell_btn",
+                on_click=toggle_notif,
+                help=f"{unread} notificaciones sin leer" if unread else "Notificaciones",
+            )
+    with col_theme:
+        with st.container(key="theme_btn_container"):
+            st.button(
+                "🌙" if is_dark else "☀️",
+                key="theme_toggle_btn",
+                on_click=toggle_theme,
+                help="Cambiar tema",
+            )
+
+    # Notifications panel (full width below)
+    if st.session_state.get("notif_open"):
+        with st.expander("🔔 Notificaciones", expanded=True):
+            notif_df = get_notificaciones(st.session_state.user_id, limit=20)
+
+            if notif_df.empty:
+                st.caption("Sin notificaciones todavía 📭")
+            else:
+                if st.button("✓ Marcar todas leídas", key="mark_all_read"):
+                    marcar_todas_leidas(st.session_state.user_id)
+                    st.rerun()
+
+                for _, notif in notif_df.iterrows():
+                    bg = "rgba(16, 185, 129, 0.1)" if not notif["leida"] else "transparent"
+                    border = "border-left: 3px solid #10B981;" if not notif["leida"] else ""
+                    try:
+                        fecha = datetime.fromisoformat(notif["creada_en"].replace("Z", "+00:00")).strftime("%d %b %H:%M")
+                    except Exception:
+                        fecha = notif["creada_en"][:16]
+
+                    st.html(f"""
+                    <div style="padding: 10px; margin: 8px 0; border-radius: 8px; background: {bg}; {border}">
+                        <div style="font-weight: 600; font-size: 13px;">{notif['titulo']}</div>
+                        <div style="font-size: 12px; opacity: 0.85; margin-top: 4px;">{notif['mensaje']}</div>
+                        <div style="font-size: 10px; opacity: 0.6; margin-top: 4px;">{fecha}</div>
+                    </div>
+                    """)
 
     # Navigation buttons
     if st.sidebar.button("🏠 Inicio", use_container_width=True, key="nav_inicio"):

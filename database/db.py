@@ -377,3 +377,163 @@ def remove_miembro_sesion(sesion_id: int, auth_user_id: int) -> bool:
         return True
     except Exception:
         return False
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# COMENTARIOS
+# ═════════════════════════════════════════════════════════════════════════════
+
+def get_comentarios(usuario_id: int) -> pd.DataFrame:
+    """Get all comments for a specific tracked user"""
+    supabase = get_supabase()
+    try:
+        result = supabase.table("comentarios").select("*").eq("usuario_id", usuario_id).order("creado_en", desc=True).execute()
+        return pd.DataFrame(result.data) if result.data else pd.DataFrame()
+    except Exception:
+        return pd.DataFrame()
+
+
+def add_comentario(usuario_id: int, auth_user_id: int, auth_username: str, mensaje: str) -> tuple[bool, str]:
+    """Add a comment to a user. Returns (success, error_message)"""
+    supabase = get_supabase()
+    try:
+        supabase.table("comentarios").insert({
+            "usuario_id": int(usuario_id),
+            "auth_user_id": int(auth_user_id),
+            "auth_username": auth_username,
+            "mensaje": mensaje,
+        }).execute()
+        return True, ""
+    except Exception as e:
+        return False, str(e)
+
+
+def delete_comentario(comentario_id: int, auth_user_id: int) -> bool:
+    """Delete a comment (only the author can delete it)"""
+    supabase = get_supabase()
+    try:
+        # Verify author
+        result = supabase.table("comentarios").select("auth_user_id").eq("id", comentario_id).execute()
+        if not result.data or result.data[0]["auth_user_id"] != auth_user_id:
+            return False
+        supabase.table("comentarios").delete().eq("id", comentario_id).execute()
+        return True
+    except Exception:
+        return False
+
+
+def get_comentarios_count(usuario_id: int) -> int:
+    """Get count of comments for a user"""
+    supabase = get_supabase()
+    try:
+        result = supabase.table("comentarios").select("id", count="exact").eq("usuario_id", usuario_id).execute()
+        return result.count if result.count else 0
+    except Exception:
+        return 0
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# NOTIFICACIONES
+# ═════════════════════════════════════════════════════════════════════════════
+
+def crear_notificacion(auth_user_id: int, tipo: str, titulo: str, mensaje: str) -> bool:
+    """Create a notification for a user"""
+    supabase = get_supabase()
+    try:
+        supabase.table("notificaciones").insert({
+            "auth_user_id": int(auth_user_id),
+            "tipo": tipo,
+            "titulo": titulo,
+            "mensaje": mensaje,
+        }).execute()
+        return True
+    except Exception:
+        return False
+
+
+def get_notificaciones(auth_user_id: int, limit: int = 20) -> pd.DataFrame:
+    """Get notifications for a user (most recent first)"""
+    supabase = get_supabase()
+    try:
+        result = supabase.table("notificaciones").select("*").eq("auth_user_id", auth_user_id).order("creada_en", desc=True).limit(limit).execute()
+        return pd.DataFrame(result.data) if result.data else pd.DataFrame()
+    except Exception:
+        return pd.DataFrame()
+
+
+def get_notificaciones_no_leidas(auth_user_id: int) -> int:
+    """Get count of unread notifications"""
+    supabase = get_supabase()
+    try:
+        result = supabase.table("notificaciones").select("id", count="exact").eq("auth_user_id", auth_user_id).eq("leida", False).execute()
+        return result.count if result.count else 0
+    except Exception:
+        return 0
+
+
+def marcar_todas_leidas(auth_user_id: int) -> bool:
+    """Mark all notifications as read"""
+    supabase = get_supabase()
+    try:
+        supabase.table("notificaciones").update({"leida": True}).eq("auth_user_id", auth_user_id).execute()
+        return True
+    except Exception:
+        return False
+
+
+def get_miembros_de_sesiones_usuario(auth_user_id: int) -> list[int]:
+    """Get all auth_user_ids that share at least one session with this user"""
+    supabase = get_supabase()
+    try:
+        # Sesiones del usuario (owner o miembro)
+        own_result = supabase.table("sesiones").select("id, usuario_id").eq("usuario_id", auth_user_id).execute()
+        member_result = supabase.table("sesion_miembros").select("sesion_id").eq("auth_user_id", auth_user_id).execute()
+
+        sesion_ids = []
+        if own_result.data:
+            sesion_ids.extend([s["id"] for s in own_result.data])
+        if member_result.data:
+            sesion_ids.extend([m["sesion_id"] for m in member_result.data])
+
+        if not sesion_ids:
+            return []
+
+        # Owners de esas sesiones
+        owners = supabase.table("sesiones").select("usuario_id").in_("id", sesion_ids).execute()
+        # Miembros de esas sesiones
+        members = supabase.table("sesion_miembros").select("auth_user_id").in_("sesion_id", sesion_ids).execute()
+
+        all_users = set()
+        if owners.data:
+            all_users.update(o["usuario_id"] for o in owners.data)
+        if members.data:
+            all_users.update(m["auth_user_id"] for m in members.data)
+
+        # Excluir al usuario actual
+        all_users.discard(auth_user_id)
+        return list(all_users)
+    except Exception:
+        return []
+
+
+def notificar_a_miembros_sesion(sesion_id: int, exclude_auth_user_id: int,
+                                tipo: str, titulo: str, mensaje: str) -> None:
+    """Send notification to all members of a session except the actor"""
+    supabase = get_supabase()
+    try:
+        # Get owner
+        sesion = supabase.table("sesiones").select("usuario_id").eq("id", sesion_id).execute()
+        recipients = set()
+        if sesion.data:
+            recipients.add(sesion.data[0]["usuario_id"])
+        # Get members
+        members = supabase.table("sesion_miembros").select("auth_user_id").eq("sesion_id", sesion_id).execute()
+        if members.data:
+            recipients.update(m["auth_user_id"] for m in members.data)
+        # Exclude actor
+        recipients.discard(exclude_auth_user_id)
+
+        for rid in recipients:
+            crear_notificacion(rid, tipo, titulo, mensaje)
+    except Exception:
+        pass
