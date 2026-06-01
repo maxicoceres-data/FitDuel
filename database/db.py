@@ -1,177 +1,34 @@
 """
-Database management for Maxi & Belu
-Handles all SQLite operations
+Database management for FitDuel
+Now using Supabase (PostgreSQL cloud)
 """
 
-import sqlite3
 import pandas as pd
 import bcrypt
-from pathlib import Path
+import streamlit as st
+from supabase import create_client, Client
 
-DB_PATH = Path("data/maxi_belu.db")
+
+# ═════════════════════════════════════════════════════════════════════════════
+# SUPABASE CLIENT
+# ═════════════════════════════════════════════════════════════════════════════
+
+@st.cache_resource
+def get_supabase() -> Client:
+    """Get or create Supabase client"""
+    url = st.secrets["supabase"]["url"]
+    key = st.secrets["supabase"]["key"]
+    return create_client(url, key)
 
 
 def init_db():
-    """Initialize the database with required tables"""
-    DB_PATH.parent.mkdir(exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-
-    # Usuarios (auth) table
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS auth_users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT UNIQUE NOT NULL,
-            password_hash TEXT NOT NULL,
-            email TEXT,
-            creado_en TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-
-    # Sesiones table
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS sesiones (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            usuario_id INTEGER NOT NULL,
-            nombre TEXT NOT NULL,
-            fecha_inicio DATE,
-            fecha_fin DATE,
-            competitivo BOOLEAN DEFAULT 1,
-            objetivo TEXT,
-            creada_en TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (usuario_id) REFERENCES auth_users(id),
-            UNIQUE(usuario_id, nombre)
-        )
-    """)
-
-    # Usuarios table
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS usuarios (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            sesion_id INTEGER NOT NULL,
-            nombre TEXT NOT NULL,
-            altura REAL NOT NULL,
-            meta_peso REAL NOT NULL,
-            peso_inicial REAL NOT NULL,
-            creado_en TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (sesion_id) REFERENCES sesiones(id)
-        )
-    """)
-
-    # Pesos table
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS pesos (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            usuario_id INTEGER NOT NULL,
-            peso REAL NOT NULL,
-            fecha TEXT NOT NULL,
-            registrado_en TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (usuario_id) REFERENCES usuarios(id)
-        )
-    """)
-
-    conn.commit()
-    conn.close()
-
-
-def get_sesiones() -> pd.DataFrame:
-    """Get all sessions"""
-    conn = sqlite3.connect(DB_PATH)
-    df = pd.read_sql_query("SELECT * FROM sesiones", conn)
-    conn.close()
-    return df
-
-
-def create_sesion(nombre: str) -> int | None:
-    """Create a new session"""
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    try:
-        cursor.execute("INSERT INTO sesiones (nombre) VALUES (?)", (nombre,))
-        conn.commit()
-        sesion_id = cursor.lastrowid
-        conn.close()
-        return sesion_id
-    except sqlite3.IntegrityError:
-        conn.close()
-        return None
-
-
-def get_usuarios(sesion_id: int) -> pd.DataFrame:
-    """Get users for a specific session"""
-    conn = sqlite3.connect(DB_PATH)
-    df = pd.read_sql_query(
-        "SELECT * FROM usuarios WHERE sesion_id = ? ORDER BY id",
-        conn,
-        params=(sesion_id,),
-    )
-    conn.close()
-    return df
-
-
-def create_usuario(
-    sesion_id: int, nombre: str, altura: float, meta_peso: float, peso_inicial: float
-) -> int:
-    """Create a new user"""
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute(
-        "INSERT INTO usuarios (sesion_id, nombre, altura, meta_peso, peso_inicial) VALUES (?, ?, ?, ?, ?)",
-        (sesion_id, nombre, altura, meta_peso, peso_inicial),
-    )
-    conn.commit()
-    usuario_id = cursor.lastrowid
-    conn.close()
-    return usuario_id
-
-
-def get_pesos_usuario(usuario_id: int) -> pd.DataFrame:
-    """Get weight history for a user"""
-    conn = sqlite3.connect(DB_PATH)
-    df = pd.read_sql_query(
-        "SELECT * FROM pesos WHERE usuario_id = ? ORDER BY fecha",
-        conn,
-        params=(usuario_id,),
-    )
-    conn.close()
-    return df
-
-
-def add_peso(usuario_id: int, peso: float, fecha: str) -> bool:
-    """Add a weight record"""
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    try:
-        cursor.execute(
-            "INSERT INTO pesos (usuario_id, peso, fecha) VALUES (?, ?, ?)",
-            (usuario_id, peso, fecha),
-        )
-        conn.commit()
-        conn.close()
-        return True
-    except Exception:
-        conn.close()
-        return False
-
-
-def get_usuario_by_id(usuario_id: int) -> dict | None:
-    """Get a specific user by ID"""
-    conn = sqlite3.connect(DB_PATH)
-    df = pd.read_sql_query(
-        "SELECT * FROM usuarios WHERE id = ?",
-        conn,
-        params=(usuario_id,),
-    )
-    conn.close()
-    if df.empty:
-        return None
-    return df.iloc[0].to_dict()
+    """No-op for Supabase - tables are created via SQL"""
+    pass
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# AUTHENTICATION FUNCTIONS
+# AUTHENTICATION
 # ═════════════════════════════════════════════════════════════════════════════
-
 
 def hash_password(password: str) -> str:
     """Hash a password using bcrypt"""
@@ -186,208 +43,337 @@ def verify_password(password: str, password_hash: str) -> bool:
 
 def register_user(username: str, password: str, email: str = "") -> tuple[bool, str]:
     """Register a new user. Returns (success, message)"""
-    # Validate inputs
     if not username or len(username) < 3:
         return False, "El usuario debe tener al menos 3 caracteres"
     if not password or len(password) < 6:
         return False, "La contraseña debe tener al menos 6 caracteres"
 
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
+    supabase = get_supabase()
     try:
         password_hash = hash_password(password)
-        cursor.execute(
-            "INSERT INTO auth_users (username, password_hash, email) VALUES (?, ?, ?)",
-            (username, password_hash, email),
-        )
-        conn.commit()
-        conn.close()
+        result = supabase.table("auth_users").insert({
+            "username": username,
+            "password_hash": password_hash,
+            "email": email,
+        }).execute()
         return True, "✅ Usuario registrado exitosamente"
-    except sqlite3.IntegrityError:
-        conn.close()
-        return False, "❌ El usuario ya existe"
     except Exception as e:
-        conn.close()
-        return False, f"❌ Error: {str(e)}"
+        error_msg = str(e)
+        if "duplicate" in error_msg.lower() or "unique" in error_msg.lower():
+            return False, "❌ El usuario ya existe"
+        return False, f"❌ Error: {error_msg}"
 
 
 def login_user(username: str, password: str) -> tuple[bool, int | None, str]:
     """Login a user. Returns (success, user_id, message)"""
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
+    supabase = get_supabase()
+    try:
+        result = supabase.table("auth_users").select("id, password_hash").eq("username", username).execute()
+        if not result.data:
+            return False, None, "❌ Usuario no encontrado"
 
-    cursor.execute("SELECT id, password_hash FROM auth_users WHERE username = ?", (username,))
-    result = cursor.fetchone()
-    conn.close()
+        user_data = result.data[0]
+        user_id = user_data["id"]
+        password_hash = user_data["password_hash"]
 
-    if not result:
-        return False, None, "❌ Usuario no encontrado"
-
-    user_id, password_hash = result
-    if verify_password(password, password_hash):
-        return True, user_id, "✅ Inicio de sesión exitoso"
-    else:
+        if verify_password(password, password_hash):
+            return True, user_id, "✅ Inicio de sesión exitoso"
         return False, None, "❌ Contraseña incorrecta"
+    except Exception as e:
+        return False, None, f"❌ Error: {str(e)}"
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# SESIONES
+# ═════════════════════════════════════════════════════════════════════════════
+
+def get_sesiones() -> pd.DataFrame:
+    """Get all sessions"""
+    supabase = get_supabase()
+    result = supabase.table("sesiones").select("*").execute()
+    return pd.DataFrame(result.data) if result.data else pd.DataFrame()
+
+
+def create_sesion(nombre: str) -> int | None:
+    """Create a new session (legacy)"""
+    supabase = get_supabase()
+    try:
+        result = supabase.table("sesiones").insert({"nombre": nombre}).execute()
+        return result.data[0]["id"] if result.data else None
+    except Exception:
+        return None
 
 
 def get_sesion_by_id(sesion_id: int) -> dict | None:
     """Get session details by ID"""
-    conn = sqlite3.connect(DB_PATH)
-    df = pd.read_sql_query(
-        "SELECT * FROM sesiones WHERE id = ?",
-        conn,
-        params=(sesion_id,),
-    )
-    conn.close()
-    if df.empty:
+    supabase = get_supabase()
+    try:
+        result = supabase.table("sesiones").select("*").eq("id", sesion_id).execute()
+        return result.data[0] if result.data else None
+    except Exception:
         return None
-    return df.iloc[0].to_dict()
 
 
 def get_sesiones_por_usuario(usuario_id: int) -> pd.DataFrame:
-    """Get all sessions for a specific user"""
-    conn = sqlite3.connect(DB_PATH)
-    df = pd.read_sql_query(
-        "SELECT id, nombre FROM sesiones WHERE usuario_id = ? ORDER BY creada_en DESC",
-        conn,
-        params=(usuario_id,),
-    )
-    conn.close()
-    return df
+    """Get all sessions where user is owner OR member"""
+    supabase = get_supabase()
+    try:
+        # Sesiones donde es owner
+        own_result = supabase.table("sesiones").select("id, nombre").eq("usuario_id", usuario_id).execute()
+
+        # Sesiones donde es miembro
+        member_result = supabase.table("sesion_miembros").select("sesion_id").eq("auth_user_id", usuario_id).execute()
+
+        all_sessions = []
+        if own_result.data:
+            all_sessions.extend(own_result.data)
+
+        if member_result.data:
+            member_sesion_ids = [m["sesion_id"] for m in member_result.data]
+            if member_sesion_ids:
+                member_sesiones = supabase.table("sesiones").select("id, nombre").in_("id", member_sesion_ids).execute()
+                if member_sesiones.data:
+                    # Evitar duplicados
+                    existing_ids = {s["id"] for s in all_sessions}
+                    for s in member_sesiones.data:
+                        if s["id"] not in existing_ids:
+                            all_sessions.append(s)
+
+        return pd.DataFrame(all_sessions) if all_sessions else pd.DataFrame(columns=["id", "nombre"])
+    except Exception:
+        return pd.DataFrame(columns=["id", "nombre"])
 
 
-def create_sesion_for_user(usuario_id: int, nombre: str, fecha_inicio: str = None, fecha_fin: str = None, competitivo: bool = True, objetivo: str = None) -> int | None:
+def create_sesion_for_user(usuario_id: int, nombre: str, fecha_inicio: str = None,
+                           fecha_fin: str = None, competitivo: bool = True,
+                           objetivo: str = None) -> int | None:
     """Create a new session for a user"""
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
+    supabase = get_supabase()
     try:
-        cursor.execute(
-            "INSERT INTO sesiones (usuario_id, nombre, fecha_inicio, fecha_fin, competitivo, objetivo) VALUES (?, ?, ?, ?, ?, ?)",
-            (usuario_id, nombre, fecha_inicio, fecha_fin, competitivo, objetivo),
-        )
-        conn.commit()
-        sesion_id = cursor.lastrowid
-        conn.close()
-        return sesion_id
-    except sqlite3.IntegrityError:
-        conn.close()
-        return None
+        data = {
+            "usuario_id": usuario_id,
+            "nombre": nombre,
+            "fecha_inicio": fecha_inicio,
+            "fecha_fin": fecha_fin,
+            "competitivo": competitivo,
+            "objetivo": objetivo,
+        }
+        result = supabase.table("sesiones").insert(data).execute()
+        return result.data[0]["id"] if result.data else None
     except Exception:
-        conn.close()
         return None
 
 
-def update_usuario(usuario_id: int, nombre: str = None, altura: float = None, meta_peso: float = None) -> bool:
-    """Update user information"""
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    try:
-        updates = []
-        params = []
-
-        if nombre is not None:
-            updates.append("nombre = ?")
-            params.append(nombre)
-        if altura is not None:
-            updates.append("altura = ?")
-            params.append(altura)
-        if meta_peso is not None:
-            updates.append("meta_peso = ?")
-            params.append(meta_peso)
-
-        if not updates:
-            conn.close()
-            return False
-
-        params.append(usuario_id)
-        query = f"UPDATE usuarios SET {', '.join(updates)} WHERE id = ?"
-        cursor.execute(query, params)
-        conn.commit()
-        conn.close()
-        return True
-    except Exception:
-        conn.close()
-        return False
-
-
-def delete_usuario(usuario_id: int) -> bool:
-    """Delete a user and all their weight records"""
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    try:
-        # Delete weight records first
-        cursor.execute("DELETE FROM pesos WHERE usuario_id = ?", (usuario_id,))
-        # Delete user
-        cursor.execute("DELETE FROM usuarios WHERE id = ?", (usuario_id,))
-        conn.commit()
-        conn.close()
-        return True
-    except Exception:
-        conn.close()
-        return False
-
-
-def update_sesion(sesion_id: int, nombre: str = None, fecha_inicio = None, fecha_fin = None, competitivo: bool = None, objetivo: str = None) -> bool:
+def update_sesion(sesion_id: int, nombre: str = None, fecha_inicio=None,
+                  fecha_fin=None, competitivo: bool = None, objetivo: str = None) -> bool:
     """Update session information"""
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
+    supabase = get_supabase()
     try:
-        updates = []
-        params = []
-
+        updates = {}
         if nombre is not None:
-            updates.append("nombre = ?")
-            params.append(nombre)
+            updates["nombre"] = nombre
         if fecha_inicio is not None:
-            updates.append("fecha_inicio = ?")
-            params.append(fecha_inicio)
+            updates["fecha_inicio"] = fecha_inicio
         if fecha_fin is not None:
-            updates.append("fecha_fin = ?")
-            params.append(fecha_fin)
+            updates["fecha_fin"] = fecha_fin
         if competitivo is not None:
-            updates.append("competitivo = ?")
-            params.append(competitivo)
+            updates["competitivo"] = competitivo
         if objetivo is not None:
-            updates.append("objetivo = ?")
-            params.append(objetivo)
+            updates["objetivo"] = objetivo
 
         if not updates:
-            conn.close()
             return False
 
-        params.append(sesion_id)
-        query = f"UPDATE sesiones SET {', '.join(updates)} WHERE id = ?"
-        cursor.execute(query, params)
-        conn.commit()
-        conn.close()
+        supabase.table("sesiones").update(updates).eq("id", sesion_id).execute()
         return True
     except Exception:
-        conn.close()
         return False
 
 
 def delete_sesion(sesion_id: int) -> bool:
-    """Delete a session and all related users and weight records"""
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
+    """Delete a session and cascade everything"""
+    supabase = get_supabase()
     try:
-        # Get all usuarios in this sesion
-        cursor.execute("SELECT id FROM usuarios WHERE sesion_id = ?", (sesion_id,))
-        usuarios = cursor.fetchall()
-
-        # Delete weight records for each user
-        for usuario in usuarios:
-            cursor.execute("DELETE FROM pesos WHERE usuario_id = ?", (usuario[0],))
-
-        # Delete usuarios
-        cursor.execute("DELETE FROM usuarios WHERE sesion_id = ?", (sesion_id,))
-
-        # Delete sesion
-        cursor.execute("DELETE FROM sesiones WHERE id = ?", (sesion_id,))
-
-        conn.commit()
-        conn.close()
+        # CASCADE in Supabase elimina automáticamente usuarios y pesos
+        supabase.table("sesiones").delete().eq("id", sesion_id).execute()
         return True
     except Exception:
-        conn.close()
+        return False
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# USUARIOS (participantes en sesiones)
+# ═════════════════════════════════════════════════════════════════════════════
+
+def get_usuarios(sesion_id: int) -> pd.DataFrame:
+    """Get users for a specific session"""
+    supabase = get_supabase()
+    try:
+        result = supabase.table("usuarios").select("*").eq("sesion_id", sesion_id).order("id").execute()
+        return pd.DataFrame(result.data) if result.data else pd.DataFrame()
+    except Exception:
+        return pd.DataFrame()
+
+
+def create_usuario(sesion_id: int, nombre: str, altura: float,
+                   meta_peso: float, peso_inicial: float) -> int | None:
+    """Create a new participant in a session"""
+    supabase = get_supabase()
+    try:
+        result = supabase.table("usuarios").insert({
+            "sesion_id": sesion_id,
+            "nombre": nombre,
+            "altura": altura,
+            "meta_peso": meta_peso,
+            "peso_inicial": peso_inicial,
+        }).execute()
+        return result.data[0]["id"] if result.data else None
+    except Exception:
+        return None
+
+
+def get_usuario_by_id(usuario_id: int) -> dict | None:
+    """Get a specific user by ID"""
+    supabase = get_supabase()
+    try:
+        result = supabase.table("usuarios").select("*").eq("id", usuario_id).execute()
+        return result.data[0] if result.data else None
+    except Exception:
+        return None
+
+
+def update_usuario(usuario_id: int, nombre: str = None, altura: float = None,
+                   meta_peso: float = None) -> bool:
+    """Update user information"""
+    supabase = get_supabase()
+    try:
+        updates = {}
+        if nombre is not None:
+            updates["nombre"] = nombre
+        if altura is not None:
+            updates["altura"] = altura
+        if meta_peso is not None:
+            updates["meta_peso"] = meta_peso
+
+        if not updates:
+            return False
+
+        supabase.table("usuarios").update(updates).eq("id", usuario_id).execute()
+        return True
+    except Exception:
+        return False
+
+
+def delete_usuario(usuario_id: int) -> bool:
+    """Delete a user and all their weight records (CASCADE)"""
+    supabase = get_supabase()
+    try:
+        supabase.table("usuarios").delete().eq("id", usuario_id).execute()
+        return True
+    except Exception:
+        return False
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# PESOS
+# ═════════════════════════════════════════════════════════════════════════════
+
+def get_pesos_usuario(usuario_id: int) -> pd.DataFrame:
+    """Get weight history for a user"""
+    supabase = get_supabase()
+    try:
+        result = supabase.table("pesos").select("*").eq("usuario_id", usuario_id).order("fecha").execute()
+        return pd.DataFrame(result.data) if result.data else pd.DataFrame()
+    except Exception:
+        return pd.DataFrame()
+
+
+def add_peso(usuario_id: int, peso: float, fecha: str) -> bool:
+    """Add a weight record"""
+    supabase = get_supabase()
+    try:
+        supabase.table("pesos").insert({
+            "usuario_id": usuario_id,
+            "peso": peso,
+            "fecha": fecha,
+        }).execute()
+        return True
+    except Exception:
+        return False
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# MIEMBROS DE SESIONES (sesiones compartidas)
+# ═════════════════════════════════════════════════════════════════════════════
+
+def add_miembro_sesion(sesion_id: int, username: str) -> tuple[bool, str]:
+    """Add a user as member of a session by username"""
+    supabase = get_supabase()
+    try:
+        # Buscar el usuario por username
+        user_result = supabase.table("auth_users").select("id").eq("username", username).execute()
+        if not user_result.data:
+            return False, "❌ Usuario no encontrado"
+
+        auth_user_id = user_result.data[0]["id"]
+
+        # Verificar que no sea ya miembro
+        existing = supabase.table("sesion_miembros").select("id").eq("sesion_id", sesion_id).eq("auth_user_id", auth_user_id).execute()
+        if existing.data:
+            return False, "❌ Este usuario ya es miembro del desafío"
+
+        # Agregar como miembro
+        supabase.table("sesion_miembros").insert({
+            "sesion_id": sesion_id,
+            "auth_user_id": auth_user_id,
+        }).execute()
+        return True, f"✅ Usuario '{username}' agregado al desafío"
+    except Exception as e:
+        return False, f"❌ Error: {str(e)}"
+
+
+def get_miembros_sesion(sesion_id: int) -> pd.DataFrame:
+    """Get all members of a session (owner + invited)"""
+    supabase = get_supabase()
+    try:
+        # Obtener owner
+        sesion_result = supabase.table("sesiones").select("usuario_id").eq("id", sesion_id).execute()
+
+        members = []
+        if sesion_result.data:
+            owner_id = sesion_result.data[0]["usuario_id"]
+            owner_info = supabase.table("auth_users").select("id, username").eq("id", owner_id).execute()
+            if owner_info.data:
+                members.append({
+                    "auth_user_id": owner_info.data[0]["id"],
+                    "username": owner_info.data[0]["username"],
+                    "rol": "👑 Owner"
+                })
+
+        # Obtener miembros invitados
+        miembros_result = supabase.table("sesion_miembros").select("auth_user_id").eq("sesion_id", sesion_id).execute()
+        if miembros_result.data:
+            member_ids = [m["auth_user_id"] for m in miembros_result.data]
+            if member_ids:
+                users_info = supabase.table("auth_users").select("id, username").in_("id", member_ids).execute()
+                if users_info.data:
+                    for user in users_info.data:
+                        members.append({
+                            "auth_user_id": user["id"],
+                            "username": user["username"],
+                            "rol": "👤 Miembro"
+                        })
+
+        return pd.DataFrame(members) if members else pd.DataFrame()
+    except Exception:
+        return pd.DataFrame()
+
+
+def remove_miembro_sesion(sesion_id: int, auth_user_id: int) -> bool:
+    """Remove a member from a session"""
+    supabase = get_supabase()
+    try:
+        supabase.table("sesion_miembros").delete().eq("sesion_id", sesion_id).eq("auth_user_id", auth_user_id).execute()
+        return True
+    except Exception:
         return False

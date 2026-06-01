@@ -16,6 +16,9 @@ from database import (
     get_sesion_by_id,
     update_sesion,
     delete_sesion,
+    add_miembro_sesion,
+    get_miembros_sesion,
+    remove_miembro_sesion,
 )
 from utils import TIPS
 
@@ -93,47 +96,50 @@ st.markdown("""
 # INITIALIZATION
 # ═════════════════════════════════════════════════════════════════════════════
 
-import json
-import os
+import extra_streamlit_components as stx
 
 init_db()
 
 # ─────────────────────────────────────────────────────────────────────────
-# RESTORE SESSION FROM FILE
+# COOKIE-BASED SESSION (per-browser)
 # ─────────────────────────────────────────────────────────────────────────
 
-SESSION_FILE = "data/.session"
+def get_cookie_manager():
+    if "cookie_manager" not in st.session_state:
+        st.session_state.cookie_manager = stx.CookieManager(key="fitduel_cookies")
+    return st.session_state.cookie_manager
+
+cookie_manager = get_cookie_manager()
 
 def save_session():
-    """Save current session to file"""
+    """Save session to browser cookie"""
     if st.session_state.get("logged_in"):
-        session_data = {
-            "logged_in": True,
-            "user_id": st.session_state.user_id,
-            "username": st.session_state.username,
-        }
-        os.makedirs(os.path.dirname(SESSION_FILE), exist_ok=True)
-        with open(SESSION_FILE, "w") as f:
-            json.dump(session_data, f)
+        from datetime import timedelta
+        cookie_manager.set(
+            "user_session",
+            {
+                "user_id": st.session_state.user_id,
+                "username": st.session_state.username,
+            },
+            expires_at=datetime.now() + timedelta(days=30),
+        )
 
 def restore_session():
-    """Restore session from file if exists"""
-    if os.path.exists(SESSION_FILE):
-        try:
-            with open(SESSION_FILE, "r") as f:
-                session_data = json.load(f)
-                if session_data.get("logged_in"):
-                    st.session_state.logged_in = True
-                    st.session_state.user_id = session_data.get("user_id")
-                    st.session_state.username = session_data.get("username")
-                    st.session_state.current_page = "inicio"
-        except:
-            pass
+    """Restore session from browser cookie"""
+    session_data = cookie_manager.get("user_session")
+    if session_data and isinstance(session_data, dict):
+        st.session_state.logged_in = True
+        st.session_state.user_id = session_data.get("user_id")
+        st.session_state.username = session_data.get("username")
+        if "current_page" not in st.session_state:
+            st.session_state.current_page = "inicio"
 
 def clear_session():
-    """Clear session file"""
-    if os.path.exists(SESSION_FILE):
-        os.remove(SESSION_FILE)
+    """Clear session cookie"""
+    try:
+        cookie_manager.delete("user_session")
+    except:
+        pass
 
 # Restore session on page load
 if "logged_in" not in st.session_state:
@@ -297,20 +303,79 @@ if st.session_state.get("logged_in"):
             if "delete_open" not in st.session_state:
                 st.session_state.delete_open = False
 
+            if "members_open" not in st.session_state:
+                st.session_state.members_open = False
+
             def toggle_edit():
                 st.session_state.edit_open = not st.session_state.edit_open
                 st.session_state.delete_open = False
+                st.session_state.members_open = False
 
             def toggle_delete():
                 st.session_state.delete_open = not st.session_state.delete_open
                 st.session_state.edit_open = False
+                st.session_state.members_open = False
+
+            def toggle_members():
+                st.session_state.members_open = not st.session_state.members_open
+                st.session_state.edit_open = False
+                st.session_state.delete_open = False
+
+            # Check if user is owner (only owners can edit/delete)
+            is_owner = sesion_info and sesion_info.get("usuario_id") == usuario_id
 
             # Botones de acción principales
-            col_btn1, col_btn2 = st.columns(2)
-            with col_btn1:
-                st.button("✏️ Editar desafío", key="btn_edit", use_container_width=True, on_click=toggle_edit)
-            with col_btn2:
-                st.button("🗑️ Eliminar desafío", key="btn_delete", use_container_width=True, on_click=toggle_delete)
+            if is_owner:
+                col_btn1, col_btn2, col_btn3 = st.columns(3)
+                with col_btn1:
+                    st.button("✏️ Editar desafío", key="btn_edit", use_container_width=True, on_click=toggle_edit)
+                with col_btn2:
+                    st.button("👥 Miembros", key="btn_members", use_container_width=True, on_click=toggle_members)
+                with col_btn3:
+                    st.button("🗑️ Eliminar desafío", key="btn_delete", use_container_width=True, on_click=toggle_delete)
+            else:
+                st.info("👤 Sos miembro de este desafío")
+                col_btn1, = st.columns(1)
+                with col_btn1:
+                    st.button("👥 Ver miembros", key="btn_members", use_container_width=True, on_click=toggle_members)
+
+            # SECCIÓN: MIEMBROS
+            if st.session_state.members_open and sesion_info:
+                st.markdown("### 👥 Miembros del Desafío")
+
+                # Mostrar miembros actuales
+                miembros_df = get_miembros_sesion(sesion_id)
+                if not miembros_df.empty:
+                    for _, miembro in miembros_df.iterrows():
+                        col_user, col_action = st.columns([3, 1])
+                        with col_user:
+                            st.markdown(f"**{miembro['rol']}** {miembro['username']}")
+                        with col_action:
+                            # Solo el owner puede eliminar miembros (no a sí mismo)
+                            if is_owner and miembro['rol'] != "👑 Owner":
+                                if st.button("🗑️", key=f"rm_{miembro['auth_user_id']}", help="Eliminar miembro"):
+                                    if remove_miembro_sesion(sesion_id, int(miembro['auth_user_id'])):
+                                        st.success("Miembro eliminado")
+                                        st.rerun()
+
+                # Agregar nuevo miembro (solo owner)
+                if is_owner:
+                    st.markdown("---")
+                    st.markdown("**Invitar nuevo miembro:**")
+                    with st.form(key="add_member_form"):
+                        nuevo_miembro = st.text_input("Username del usuario a invitar", placeholder="ej: belu")
+                        submitted = st.form_submit_button("➕ Invitar al desafío")
+
+                        if submitted:
+                            if nuevo_miembro:
+                                ok, msg = add_miembro_sesion(sesion_id, nuevo_miembro)
+                                if ok:
+                                    st.success(msg)
+                                    st.rerun()
+                                else:
+                                    st.error(msg)
+                            else:
+                                st.error("Ingresá un username")
 
             # SECCIÓN: EDITAR (Usando st.form)
             if st.session_state.edit_open and sesion_info:

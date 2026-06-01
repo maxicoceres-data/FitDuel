@@ -18,6 +18,9 @@ from .db import (
     get_sesion_by_id,
     update_sesion,
     delete_sesion,
+    add_miembro_sesion,
+    get_miembros_sesion,
+    remove_miembro_sesion,
 )
 
 __all__ = [
@@ -38,4 +41,7 @@ __all__ = [
     "get_sesion_by_id",
     "update_sesion",
     "delete_sesion",
+    "add_miembro_sesion",
+    "get_miembros_sesion",
+    "remove_miembro_sesion",
 ]

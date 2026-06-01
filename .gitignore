@@ -39,6 +39,7 @@ env/
 
 # Streamlit
 .streamlit/secrets.toml
+secrets.toml
 .streamlit_cache/
 .streamlit_cache2/
 
